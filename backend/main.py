@@ -1,7 +1,13 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import Dict, List, Optional
+from uuid import uuid4
+
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from services.connection_manager import ConnectionManager
+from models.session import Session
+from schemas.session import SessionCreateRequest
 
 app = FastAPI()
 
@@ -19,6 +25,39 @@ def ping():
 
 
 manager = ConnectionManager()
+
+
+SESSIONS: Dict[str, Session] = {}
+
+
+class SelectItemRequest(BaseModel):
+    item_id: str
+
+
+@app.post("/api/session", response_model=Session)
+def create_session(
+    session_data: Optional[SessionCreateRequest] = Body(default=None),
+) -> Session:
+    session_payload = session_data.dict(exclude_unset=True) if session_data else {}
+    session_id = str(uuid4())
+    session = Session(session_id=session_id, **session_payload)
+    SESSIONS[session_id] = session
+    return session
+
+
+@app.get("/api/sessions", response_model=List[Session])
+def list_sessions() -> List[Session]:
+    return list(SESSIONS.values())
+
+
+@app.post("/api/session/{session_id}/select_item")
+def select_item(session_id: str, payload: SelectItemRequest) -> Dict[str, str]:
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session.selected_item_id = payload.item_id
+    return {"session_id": session_id, "selected_item_id": payload.item_id}
 
 
 @app.websocket("/ws/session/{session_id}")
