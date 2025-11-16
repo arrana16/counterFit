@@ -1,57 +1,56 @@
 import asyncio
 import json
-import os
-from typing import Optional
-
+import requests
 import websockets
 
+BACKEND = "http://localhost:8000"
 
-async def reader(ws: websockets.WebSocketClientProtocol) -> None:
-    try:
-        async for message in ws:
-            try:
-                parsed = json.loads(message)
-            except json.JSONDecodeError:
-                print(f"< raw: {message}")
-            else:
-                print(f"< {json.dumps(parsed, indent=2)}")
-    except websockets.ConnectionClosedOK:
-        print("Connection closed by server")
+ITEM_ID = "demo-item-1"   # Must match one in LISTINGS dict
+SESSION_URL = f"{BACKEND}/api/session"
+SELECT_URL = f"{BACKEND}/api/session/{{session_id}}/select_item"
+WS_URL = "ws://localhost:8000/ws/session/{session_id}"
 
 
-async def writer(
-    ws: websockets.WebSocketClientProtocol, initial_message: Optional[str]
-) -> None:
-    loop = asyncio.get_running_loop()
-    if initial_message:
-        await ws.send(initial_message)
-
-    print("Type a message and press enter to send it. Leave blank to quit.")
-    while True:
-        message = await loop.run_in_executor(None, input, "> ")
-        if not message.strip():
-            await ws.close()
-            break
-        await ws.send(message)
+def create_session():
+    print("📌 Creating session...")
+    res = requests.post(SESSION_URL)
+    res.raise_for_status()
+    session_id = res.json()["session_id"]
+    print("✔ Session created:", session_id)
+    return session_id
 
 
-async def main() -> None:
-    session_id = os.environ.get("SESSION_ID", "demo")
-    uri = os.environ.get(
-        "WS_URI", f"ws://localhost:8000/ws/session/{session_id}"
-    )
-    initial_message = os.environ.get("WS_MESSAGE")
-    print(f"Connecting to {uri}")
+def select_item(session_id):
+    print("📌 Selecting item...")
+    url = SELECT_URL.format(session_id=session_id)
+    res = requests.post(url, json={"item_id": ITEM_ID})
+    res.raise_for_status()
+    print("✔ Item selected:", res.json())
 
-    async with websockets.connect(uri) as websocket:
-        await asyncio.gather(
-            reader(websocket),
-            writer(websocket, initial_message),
-        )
+
+async def listen_ws(session_id):
+    print("📌 Connecting to WebSocket...")
+    url = WS_URL.format(session_id=session_id)
+
+    async with websockets.connect(url) as ws:
+        print("✔ Connected. Listening for messages...\n")
+        try:
+            while True:
+                msg = await ws.recv()
+                try:
+                    data = json.loads(msg)
+                except:
+                    data = msg
+                print("📥 WS MESSAGE:", json.dumps(data, indent=2), "\n")
+        except websockets.exceptions.ConnectionClosed as e:
+            print("❌ WS Closed:", e)
+
+
+async def main():
+    session_id = create_session()
+    select_item(session_id)
+    await listen_ws(session_id)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
